@@ -1,0 +1,28 @@
+# README
+
+## Installation
+
+### Windows
+
+1. Download the latest version of Python from [here](https://www.python.org/downloads/windows/).
+2. Install Python with the default settings.
+3. Install the required packages by running the following command in the command prompt:
+
+    ```bash
+    pip install matplotlib sympy pandas openpyxl
+    ```
+
+
+## Usage
+
+1. Run the program by running the following command in the command prompt:
+
+    ```bash
+    python main.py
+    ```
+
+2. Or run the program by running the following command in the command prompt:
+
+    ```bash
+    make run
+    ```

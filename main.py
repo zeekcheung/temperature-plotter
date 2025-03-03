@@ -1,14 +1,18 @@
-import tkinter as tk
-from tkinter import messagebox, ttk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import sympy as sp
-from datetime import datetime, timedelta
-import numpy as np
-import matplotlib.dates as mdates
+import os
 import random
 import sys
-import os
+import tkinter as tk
+from datetime import datetime, timedelta
+from tkinter import messagebox, ttk
+
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import sympy as sp
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+# TODO: Refactor
 
 # 设置matplotlib字体为微软雅黑
 plt.rcParams["font.family"] = ["Microsoft YaHei"]
@@ -25,8 +29,36 @@ def time_str_to_hours(time_str):
 
 
 # 将小时数转换回时间字符串
+# 例如：1.5 -> 01:30
 def hours_to_time_str(hours):
     return f"{int(hours):02d}:{int(hours * 60 % 60):02d}"
+
+
+# 格式化 excel 的日期数据
+# 原始格式为 2024年12月31日 25:16
+# 目标格式为 2025年1月1日 1:16
+# 如果时间超过24小时，则日期加1天，时间减去24小时
+def format_excel_date(date_str):
+    try:
+        date_part, time_part = date_str.split(" ")
+        date_format = "%Y年%m月%d日"
+        date_obj = datetime.strptime(date_part, date_format)
+        hours, minutes = map(int, time_part.split(":"))
+
+        if minutes >= 60:
+            raise ValueError("分钟数超出范围")
+
+        if hours >= 24:
+            days_to_add = hours // 24
+            hours_remaining = hours % 24
+            date_obj += timedelta(days=days_to_add)
+            hours = hours_remaining
+
+        date_obj = date_obj.replace(hour=hours, minute=minutes)
+        target_format = "%Y年%m月%d日 %H:%M"
+        return date_obj.strftime(target_format)
+    except Exception as e:
+        return f"输入的日期时间格式不正确: {e}"
 
 
 # 评估用户方程
@@ -40,24 +72,96 @@ def evaluate_temperature_equation(eq, t_value):
         return None
 
 
-# 自定义格式化函数
-def custom_formatter(x, pos):
-    return hours_to_time_str(x)
+# 修改文件名中的非法字符
+def sanitize_filename(filename):
+    illegal_chars = r'\/:*?"<>|'
+    for char in illegal_chars:
+        filename = filename.replace(char, "-")
+    return filename
 
 
-# 生成温度图
-def generate_plot(output_dir=os.path.join(os.path.dirname(__file__), "图片")):
-    title = title_entry.get() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# 生成时间和温度、湿度数据
+def generate_time_temperature_humidity_data(segments, time_interval=5):
+    time_data = []
+    temperature_data = []
+    humidity_data = []
+    excel_data = {"时间": [], "温度(℃)": [], "湿度(%)": []}
+
+    for start, end, eq, temperature_error in segments:
+        t_values = np.arange(start, end, time_interval / 60)
+        for t in t_values:
+            temperature = evaluate_temperature_equation(eq, t)
+            if temperature is None:
+                return None, None, None, None
+
+            # 添加温度噪声
+            temperature_noise = random.uniform(-temperature_error, temperature_error)
+            temperature_with_noise = temperature + temperature_noise
+
+            # 生成湿度数据（保持在 99.3% 到 99.5% 之间）
+            humidity = random.uniform(99.3, 99.5)
+
+            # 保留一位小数
+            temperature_with_noise = round(temperature_with_noise, 1)
+            humidity = round(humidity, 1)
+
+            time_data.append(t)
+            temperature_data.append(temperature_with_noise)
+            humidity_data.append(humidity)
+
+            excel_data["时间"].append(
+                format_excel_date(date_entry.get() + " " + hours_to_time_str(t))
+            )
+            excel_data["温度(℃)"].append(temperature_with_noise)
+            excel_data["湿度(%)"].append(humidity)
+
+    return time_data, temperature_data, humidity_data, excel_data
+
+
+# 保存图表
+def save_plot(fig, output_dir, title):
+    try:
+        chart_path = os.path.join(output_dir, f"{title}.png")
+        plt.savefig(chart_path)
+        plt.close()
+        return chart_path
+    except Exception as e:
+        messagebox.showerror("错误", f"保存图表失败：{e}")
+        return None
+
+
+# 保存 Excel 文件
+def save_excel(excel_data, output_dir, title):
+    try:
+        excel_path = os.path.join(output_dir, f"{title}.xlsx")
+        df = pd.DataFrame(excel_data)
+        df.to_excel(excel_path, index=False)
+        return excel_path
+    except Exception as e:
+        messagebox.showerror("错误", f"保存 Excel 文件失败：{e}")
+        return None
+
+
+def generate_plot(output_dir=os.path.dirname(__file__)):
+    # 获取标题并处理非法字符
+    title = title_entry.get() or datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+    title = sanitize_filename(title)
+
+    # 确保输出目录存在
+    img_output_dir = os.path.join(output_dir, "img")
+    excel_output_dir = os.path.join(output_dir, "excel")
+    os.makedirs(img_output_dir, exist_ok=True)
+    os.makedirs(excel_output_dir, exist_ok=True)
+
+    # 获取时间段数据
     segments = []
-
     try:
         for entry in segment_entries:
             start = time_str_to_hours(entry["start"].get())
             end = time_str_to_hours(entry["end"].get())
             eq = entry["eq"].get()
-            error = float(entry["error"].get())
+            temperature_error = float(entry["error"].get())
 
-            # 检查时间段的有效性
             if start >= end:
                 messagebox.showerror(
                     "错误",
@@ -65,79 +169,41 @@ def generate_plot(output_dir=os.path.join(os.path.dirname(__file__), "图片")):
                 )
                 return
 
-            segments.append((start, end, eq, error))
+            segments.append((start, end, eq, temperature_error))
     except ValueError as e:
         messagebox.showerror("错误", f"时间段输入无效：{e}")
         return
 
-    time_data = []
-    temp_data = []
-
-    for start, end, eq, error in segments:
-        t_values = np.linspace(start, end, 100)
-        for t in t_values:
-            temp = evaluate_temperature_equation(eq, t)
-            if temp is None:
-                return
-
-            # 添加随机噪声，以便在指定误差范围内波动
-            noise = random.uniform(-error, error)
-            temp_data.append(temp + noise)  # 添加噪声
-            time_data.append(t)
+    # 生成时间和温度、湿度数据
+    time_data, temperature_data, humidity_data, excel_data = (
+        generate_time_temperature_humidity_data(segments)
+    )
+    if time_data is None:
+        return
 
     # 将时间数据转换为datetime对象
-    start_date = datetime(2024, 1, 1)  # 假设的开始日期
+    start_date = datetime(2024, 1, 1)
     datetime_data = [start_date + timedelta(hours=t) for t in time_data]
     datetime_data_num = mdates.date2num(datetime_data)
 
-    if len(set(datetime_data)) <= 1:  # 检查所有时间点是否相同
+    if len(set(datetime_data)) <= 1:
         messagebox.showerror("错误", "时间段无效：所有时间点相同。")
         return
 
+    # 生成图表
     chart_window = tk.Toplevel(root)
-    chart_window.title("温度图")
+    chart_window.title("温湿度变化图")
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(datetime_data_num, temp_data, label="温度(℃)")
-
-    # 查找极值点
-    temp_data_np = np.array(temp_data)
-    maxima_indices = (
-        np.argwhere(np.diff(np.sign(np.diff(temp_data_np))) == -1).flatten() + 1
-    )
-    minima_indices = (
-        np.argwhere(np.diff(np.sign(np.diff(temp_data_np))) == 1).flatten() + 1
-    )
-
-    # 标记极值点
-    for idx in maxima_indices:
-        ax.annotate(
-            f"极大值: {temp_data[idx]:.2f}",
-            xy=(datetime_data[idx], temp_data[idx]),
-            xytext=(5, 5),
-            textcoords="offset points",
-            arrowprops=dict(arrowstyle="->", color="red"),
-            fontsize=8,
-            color="red",
-        )
-
-    for idx in minima_indices:
-        ax.annotate(
-            f"极小值: {temp_data[idx]:.2f}",
-            xy=(datetime_data[idx], temp_data[idx]),
-            xytext=(5, -15),
-            textcoords="offset points",
-            arrowprops=dict(arrowstyle="->", color="blue"),
-            fontsize=8,
-            color="blue",
-        )
+    ax.plot(datetime_data_num, temperature_data, label="温度(℃)", color="red")
+    ax.plot(datetime_data_num, humidity_data, label="湿度(%)", color="blue")
 
     # 设置x轴刻度值
-    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))  # 每小时显示一个刻度值
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))  # 格式化x轴显示
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
 
     ax.set_xlabel("时间(24小时制)")
-    ax.set_ylabel("温度(℃)")
+    ax.set_ylabel("温度(℃) / 湿度(%)")
     ax.set_title(title)
     ax.legend()
 
@@ -145,16 +211,19 @@ def generate_plot(output_dir=os.path.join(os.path.dirname(__file__), "图片")):
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
     canvas.draw()
 
-    output_dir = os.path.abspath(output_dir)
-    print(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-    plt.savefig(os.path.join(output_dir, title))
-    plt.close()
+    # 保存图表和 Excel 文件
+    save_plot(fig, img_output_dir, title)
+    save_excel(excel_data, excel_output_dir, title)
+
+    # if chart_path and excel_path:
+    #     messagebox.showinfo(
+    #         "完成", f"图表已保存到：{chart_path}\n数据已保存到：{excel_path}"
+    #     )
 
 
 # GUI设置
 root = tk.Tk()
-root.title("温度绘图器")
+root.title("温湿度绘图器")
 
 top_frame = tk.Frame(root)
 top_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
@@ -162,11 +231,17 @@ top_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
 title_frame = tk.Frame(top_frame)
 title_frame.pack(side=tk.TOP, pady=5)
 
-title_label = tk.Label(title_frame, text="图表标题：")
+title_label = tk.Label(title_frame, text="标题：")
 title_label.pack(side=tk.LEFT)
 
 title_entry = tk.Entry(title_frame, width=30)
 title_entry.pack(side=tk.LEFT, padx=5)
+
+date_label = tk.Label(title_frame, text="日期：")
+date_label.pack(side=tk.LEFT)
+
+date_entry = tk.Entry(title_frame, width=30)
+date_entry.pack(side=tk.LEFT, padx=5)
 
 button_frame = tk.Frame(root)
 button_frame.pack(side=tk.TOP, pady=5)
@@ -279,9 +354,9 @@ if len(sys.argv) > 1:
 
     generate_plot(output_dir)
 else:
-    add_segment("08:00", "12:00", "10*t-55", "1")
-    add_segment("12:00", "16:00", "65", "0.5")
-    add_segment("16:00", "20:00", "-5*t+145", "1")
+    add_segment("08:00", "12:00", "10*t-55", "2")
+    add_segment("12:00", "16:00", "65", "2")
+    add_segment("16:00", "20:00", "-5*t+145", "2")
 
     root.geometry("600x400")
     root.mainloop()
